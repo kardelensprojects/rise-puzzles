@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What's hidden under overexplaining?</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #ffffff;
+    color: #1a1a1a;
+    padding: 24px 20px;
+    min-height: 100vh;
+  }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; color: #1a1a1a; }
+  .sub { font-size: 13px; color: #666; margin-bottom: 20px; }
+  #controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  button {
+    font-size: 13px; padding: 7px 16px; border-radius: 8px;
+    border: 1px solid #d0d0d0; background: #fff; color: #1a1a1a;
+    cursor: pointer; font-family: inherit; transition: background 0.15s;
+  }
+  button:hover { background: #f4f4f4; }
+  button:active { transform: scale(0.97); }
+  #grid-wrap { overflow-x: auto; margin-bottom: 20px; }
+  #grid {
+    display: inline-grid;
+    grid-template-columns: repeat(18, 30px);
+    gap: 2px;
+    user-select: none;
+  }
+  .cell {
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600; border-radius: 5px; cursor: pointer;
+    color: #1a1a1a; background: #f7f7f7; transition: background 0.1s;
+  }
+  .cell.selecting { background: #FAC775; color: #5a3800; }
+  .cell.found { background: #c8eedd; color: #08503f; }
+  .cell.hint { background: #CECBF6; color: #3C3489; }
+  #word-list { display: none; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  #word-list.visible { display: flex; }
+  .word-tag {
+    font-size: 12px; padding: 5px 12px; border-radius: 20px;
+    border: 1px solid #d0d0d0; color: #555; background: #f4f4f4; transition: all 0.2s;
+  }
+  .word-tag.found { background: #c8eedd; color: #08503f; border-color: #5DCAA5; text-decoration: line-through; }
+  #msg { font-size: 13px; color: #555; min-height: 20px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>What's hidden under overexplaining?</h1>
+<p class="sub">Find all 7 words — left to right or top to bottom only.</p>
+
+<div id="controls">
+  <button onclick="giveHint()">💡 Hint</button>
+  <button onclick="toggleReveal()">👁 Reveal all</button>
+  <button onclick="resetPuzzle()">↺ Reset</button>
+</div>
+
+<div id="grid-wrap"><div id="grid"></div></div>
+<div id="word-list"></div>
+<div id="msg"></div>
+
+<script>
+const WORDS = [
+  { w: "VALIDATIONNEED",  label: "validation need",   dir: [0,1] },
+  { w: "PEOPLEPLEASING",  label: "people pleasing",   dir: [1,0] },
+  { w: "FEAROFJUDGEMENT", label: "fear of judgement", dir: [0,1] },
+  { w: "LOWCONFIDENCE",   label: "low confidence",    dir: [1,0] },
+  { w: "SELFDOUBT",       label: "self doubt",        dir: [1,0] },
+  { w: "OVERFUNCTIONING", label: "over-functioning",  dir: [0,1] },
+  { w: "NEEDOFCONTROL",   label: "need of control",   dir: [1,0] }
+];
+
+const ROWS = 18, COLS = 18;
+let grid = [], placed = [], foundWords = new Set(), selecting = [], mouseDown = false, revealed = false;
+
+function makeGrid() {
+  grid = Array.from({ length: ROWS }, () => Array(COLS).fill(''));
+  placed = [];
+  for (let { w, label, dir } of WORDS) {
+    const [dr, dc] = dir;
+    let ok = false, tries = 0;
+    while (!ok && tries < 2000) {
+      tries++;
+      const maxR = dr ? ROWS - w.length : ROWS - 1;
+      const maxC = dc ? COLS - w.length : COLS - 1;
+      if (maxR < 0 || maxC < 0) break;
+      const r = Math.floor(Math.random() * (maxR + 1));
+      const c = Math.floor(Math.random() * (maxC + 1));
+      let fits = true;
+      for (let i = 0; i < w.length; i++) {
+        const ch = grid[r + dr * i][c + dc * i];
+        if (ch && ch !== w[i]) { fits = false; break; }
+      }
+      if (fits) {
+        const cells = [];
+        for (let i = 0; i < w.length; i++) {
+          grid[r + dr * i][c + dc * i] = w[i];
+          cells.push([r + dr * i, c + dc * i]);
+        }
+        placed.push({ w, label, cells });
+        ok = true;
+      }
+    }
+  }
+  const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (!grid[r][c]) grid[r][c] = ALPHA[Math.floor(Math.random() * 26)];
+}
+
+function renderGrid() {
+  const el = document.getElementById('grid');
+  el.innerHTML = '';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const d = document.createElement('div');
+      d.className = 'cell';
+      d.textContent = grid[r][c];
+      d.dataset.r = r; d.dataset.c = c;
+      d.addEventListener('mousedown', () => { mouseDown = true; startSel(r, c); });
+      d.addEventListener('mouseover', () => { if (mouseDown) extendSel(r, c); });
+      d.addEventListener('mouseup', () => { mouseDown = false; checkSel(); });
+      d.addEventListener('touchstart', e => { e.preventDefault(); startSel(r, c); }, { passive: false });
+      d.addEventListener('touchmove', e => {
+        e.preventDefault();
+        const t = e.touches[0], el2 = document.elementFromPoint(t.clientX, t.clientY);
+        if (el2 && el2.dataset.r !== undefined) extendSel(+el2.dataset.r, +el2.dataset.c);
+      }, { passive: false });
+      d.addEventListener('touchend', () => checkSel());
+      el.appendChild(d);
+    }
+  }
+  refreshCells();
+}
+
+function renderWordList() {
+  const el = document.getElementById('word-list');
+  el.innerHTML = '';
+  for (let { w, label } of WORDS) {
+    const d = document.createElement('div');
+    d.className = 'word-tag' + (foundWords.has(w) ? ' found' : '');
+    d.id = 'tag-' + w;
+    d.textContent = label;
+    el.appendChild(d);
+  }
+  el.className = revealed ? 'visible' : '';
+}
+
+function getCell(r, c) { return document.querySelector(`.cell[data-r="${r}"][data-c="${c}"]`); }
+
+function refreshCells() {
+  document.querySelectorAll('.cell').forEach(el => el.classList.remove('hint', 'found', 'selecting'));
+  for (let { w, cells } of placed) {
+    if (foundWords.has(w)) cells.forEach(([r, c]) => getCell(r, c)?.classList.add('found'));
+  }
+  selecting.forEach(([r, c]) => {
+    const el = getCell(r, c);
+    if (el && !el.classList.contains('found')) el.classList.add('selecting');
+  });
+}
+
+function startSel(r, c) { selecting = [[r, c]]; refreshCells(); }
+
+function extendSel(r, c) {
+  if (!selecting.length) return;
+  const [sr, sc] = selecting[0];
+  const dr = r - sr, dc = c - sc;
+  if (dr === 0 && dc === 0) { selecting = [[sr, sc]]; refreshCells(); return; }
+  if (dr !== 0 && dc !== 0) return; // no diagonal
+  if (dr < 0 || dc < 0) return;     // only right and down
+  const nr = dr ? 1 : 0, nc = dc ? 1 : 0;
+  const len = Math.max(Math.abs(dr), Math.abs(dc));
+  const cells = [];
+  for (let i = 0; i <= len; i++) cells.push([sr + nr * i, sc + nc * i]);
+  selecting = cells;
+  refreshCells();
+}
+
+function checkSel() {
+  if (selecting.length < 2) { selecting = []; refreshCells(); return; }
+  const str = selecting.map(([r, c]) => grid[r][c]).join('');
+  for (let p of placed) {
+    if (!foundWords.has(p.w) && p.w === str) {
+      foundWords.add(p.w);
+      p.cells.forEach(([r, c]) => getCell(r, c)?.classList.add('found'));
+      const tag = document.getElementById('tag-' + p.w);
+      if (tag) tag.classList.add('found');
+      setMsg('✓ Found: ' + p.label);
+      if (foundWords.size === WORDS.length) setTimeout(() => setMsg('🎉 All 7 words found! Well done.'), 300);
+      selecting = []; refreshCells(); return;
+    }
+  }
+  selecting = []; refreshCells(); setMsg('');
+}
+
+function giveHint() {
+  const remaining = placed.filter(p => !foundWords.has(p.w));
+  if (!remaining.length) { setMsg('All words found!'); return; }
+  document.querySelectorAll('.cell.hint').forEach(el => el.classList.remove('hint'));
+  const pick = remaining[Math.floor(Math.random() * remaining.length)];
+  const [r, c] = pick.cells[0];
+  getCell(r, c)?.classList.add('hint');
+  setMsg('Hint: first letter of "' + pick.label + '" highlighted in purple');
+}
+
+function toggleReveal() {
+  revealed = !revealed;
+  if (revealed) {
+    for (let { w } of WORDS) foundWords.add(w);
+    refreshCells();
+    setMsg('All words revealed.');
+  } else {
+    setMsg('');
+  }
+  renderWordList();
+}
+
+function resetPuzzle() {
+  foundWords.clear(); selecting = []; revealed = false;
+  document.querySelectorAll('.cell.hint').forEach(el => el.classList.remove('hint'));
+  makeGrid(); renderGrid(); renderWordList(); setMsg('');
+}
+
+function setMsg(t) { document.getElementById('msg').textContent = t; }
+
+document.addEventListener('mouseup', () => { if (mouseDown) { mouseDown = false; checkSel(); } });
+
+makeGrid(); renderGrid(); renderWordList();
+</script>
+</body>
+</html>
